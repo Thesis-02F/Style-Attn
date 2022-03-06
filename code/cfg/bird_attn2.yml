@@ -11,8 +11,8 @@ TREE:
 
 
 TRAIN:
-    FLAG: True
-    NET_G: ''  # '../models/bird_AttnGAN2.pth'
+    FLAG: False
+    NET_G: '../models/bird_StyleAttnGAN2.pth'  # '../models/bird_AttnGAN2.pth'
     B_NET_D: True
     BATCH_SIZE: 20  # 22
     MAX_EPOCH: 600

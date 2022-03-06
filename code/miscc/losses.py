@@ -1,6 +1,8 @@
 import torch
 import torch.nn as nn
 
+import torch.nn.functional as F
+
 import numpy as np
 from miscc.config import cfg
 
@@ -15,6 +17,14 @@ def cosine_similarity(x1, x2, dim=1, eps=1e-8):
     w1 = torch.norm(x1, 2, dim)
     w2 = torch.norm(x2, 2, dim)
     return (w12 / (w1 * w2).clamp(min=eps)).squeeze()
+
+def image_to_text_loss(output, target):
+    # bs x T x vocab_size - > bs * T x vocab_size
+    bs, T, vocab_size = output.shape
+    output = output.view(-1, vocab_size)
+    # bs x T -> bs * T
+    target = target.view(-1)
+    return F.cross_entropy(output, target)
 
 
 def sent_loss(cnn_code, rnn_code, labels, class_ids,
@@ -164,7 +174,7 @@ def discriminator_loss(netD, real_imgs, fake_imgs, conditions,
     return errD
 
 
-def generator_loss(netsD, image_encoder, fake_imgs, real_labels,
+def generator_loss(netsD, image_encoder, fake_imgs, real_labels, captions,
                    words_embs, sent_emb, match_labels,
                    cap_lens, class_ids):
     numDs = len(netsD)
@@ -190,7 +200,7 @@ def generator_loss(netsD, image_encoder, fake_imgs, real_labels,
         if i == (numDs - 1):
             # words_features: batch_size x nef x 17 x 17
             # sent_code: batch_size x nef
-            region_features, cnn_code = image_encoder(fake_imgs[i])
+            region_features, cnn_code, word_logits = image_encoder(fake_imgs[i],captions)
             w_loss0, w_loss1, _ = words_loss(region_features, words_embs,
                                              match_labels, cap_lens,
                                              class_ids, batch_size)

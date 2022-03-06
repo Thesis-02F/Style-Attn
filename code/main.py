@@ -1,6 +1,6 @@
 from __future__ import print_function
 
-from model import TRANSFORMER_ENCODER
+# from model import TRANSFORMER_ENCODER
 from miscc.config import cfg, cfg_from_file
 from miscc.utils import collapse_dirs, mv_to_paths
 from miscc.metrics import compute_ppl
@@ -22,7 +22,7 @@ import torch
 import torchvision.transforms as transforms
 
 from nltk.tokenize import RegexpTokenizer
-from transformers import GPT2Tokenizer
+from transformers import GPT2Tokenizer, BertTokenizer
 
 from tqdm import tqdm
 import pytorch_fid.fid_score
@@ -35,8 +35,8 @@ def parse_args():
     parser = argparse.ArgumentParser(description='Train a AttnGAN network')
     parser.add_argument('--cfg', dest='cfg_file',
                         help='optional config file',
-                        default='cfg/bird_attn2.yml', type=str)
-    parser.add_argument('--gpu', dest='gpu_id', type=int, default=-1)
+                        default='cfg/bird_attn2_style.yml', type=str)
+    parser.add_argument('--gpu', dest='gpu_id', type=int, default=0)
     parser.add_argument('--data_dir', dest='data_dir', type=str, default='')
     parser.add_argument('--manualSeed', type=int, help='manual seed')
     parser.add_argument('--text_encoder_type', type=str.casefold, default = 'rnn' )
@@ -44,22 +44,20 @@ def parse_args():
     return args
 
 
-def gen_example(wordtoix, text_encoder_type, algo):
+def gen_example(wordtoix, algo):
     '''generate images from example sentences'''
+    from nltk.tokenize import RegexpTokenizer
     filepath = '%s/example_filenames.txt' % (cfg.DATA_DIR)
     data_dic = {}
-    text_encoder_type = text_encoder_type.casefold()
-    if text_encoder_type not in ( 'rnn', 'transformer' ):
-      raise ValueError( 'Unsupported text_encoder_type' )
     with open(filepath, "r") as f:
-        filenames = f.read().split('\n')
+        filenames = f.read().decode('utf8').split('\n')
         for name in filenames:
             if len(name) == 0:
                 continue
             filepath = '%s/%s.txt' % (cfg.DATA_DIR, name)
             with open(filepath, "r") as f:
                 print('Load from:', name)
-                sentences = f.read().split('\n')
+                sentences = f.read().decode('utf8').split('\n')
                 # a list of indices for a sentence
                 captions = []
                 cap_lens = []
@@ -67,12 +65,8 @@ def gen_example(wordtoix, text_encoder_type, algo):
                     if len(sent) == 0:
                         continue
                     sent = sent.replace("\ufffd\ufffd", " ")
-                    if text_encoder_type == 'rnn':
-                      tokenizer = RegexpTokenizer(r'\w+')
-                      tokens = tokenizer.tokenize( sent.lower() )
-                    elif text_encoder_type == 'transformer':
-                      tokenizer = GPT2Tokenizer.from_pretrained( TRANSFORMER_ENCODER )
-                      tokens = tokenizer.tokenize( sent )
+                    tokenizer = RegexpTokenizer(r'\w+')
+                    tokens = tokenizer.tokenize(sent.lower())
                     if len(tokens) == 0:
                         print('sent', sent)
                         continue
@@ -98,6 +92,7 @@ def gen_example(wordtoix, text_encoder_type, algo):
             key = name[(name.rfind('/') + 1):]
             data_dic[key] = [cap_array, cap_lens, sorted_indices]
     algo.gen_example(data_dic)
+
 
 
 if __name__ == "__main__":
@@ -141,7 +136,7 @@ if __name__ == "__main__":
         transforms.Resize(int(imsize * 76 / 64)),
         transforms.RandomCrop(imsize),
         transforms.RandomHorizontalFlip()])
-    dataset = TextDataset(cfg.DATA_DIR, args.text_encoder_type, split_dir,
+    dataset = TextDataset(cfg.DATA_DIR, split_dir,
                           base_size=cfg.TREE.BASE_SIZE,
                           transform=image_transform)
     assert dataset
@@ -150,7 +145,7 @@ if __name__ == "__main__":
         drop_last=True, shuffle=bshuffle, num_workers=int(cfg.WORKERS))
 
     # Define models and go to train/evaluate
-    algo = trainer(output_dir, dataloader, dataset.n_words, dataset.ixtoword, dataset.text_encoder_type)
+    algo = trainer(output_dir, dataloader, dataset.n_words, dataset.ixtoword)
 
     start_t = time.time()
     if cfg.TRAIN.FLAG:
@@ -163,7 +158,7 @@ if __name__ == "__main__":
         if not cfg.B_VALIDATION:
             # generate images for customized captions
             print( '\nRunning on example captions...\n++++++++++++++++++++++++++++++' )
-            root_dir_g = gen_example(dataset.wordtoix, dataset.text_encoder_type, algo)
+            root_dir_g = gen_example(dataset.wordtoix, algo)
             end_t = time.time()
             print('Total time for running on example captions:', end_t - start_t)
         else:

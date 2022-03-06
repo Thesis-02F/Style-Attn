@@ -9,7 +9,7 @@ from transformers import GPT2Tokenizer
 from collections import defaultdict
 
 from miscc.config import cfg
-from model import TRANSFORMER_ENCODER
+# from model import TRANSFORMER_ENCODER
 
 import torch
 import torch.utils.data as data
@@ -92,12 +92,10 @@ def get_imgs(img_path, imsize, bbox=None,
 
 
 class TextDataset(data.Dataset):
-    def __init__(self, data_dir, text_encoder_type, split='train',
+    def __init__(self, data_dir,  split='train',
                  base_size=64,
                  transform=None, target_transform=None):
-        self.text_encoder_type = text_encoder_type.casefold()
-        if self.text_encoder_type not in ( 'rnn', 'transformer' ):
-          raise ValueError( 'Unsupported text_encoder_type' )
+        
 
         self.transform = transform
         self.norm = transforms.Compose([
@@ -169,14 +167,8 @@ class TextDataset(data.Dataset):
                     cap = cap.replace("\ufffd\ufffd", " ")
                     # picks out sequences of alphanumeric characters as tokens
                     # and drops everything else
-                    if self.text_encoder_type == 'rnn':
-                        tokenizer = RegexpTokenizer(r'\w+')
-                        tokens = tokenizer.tokenize( cap.lower() )
-                    elif self.text_encoder_type == 'transformer':
-                        # if not i: print( 'here' )
-                        tokenizer = GPT2Tokenizer.from_pretrained( TRANSFORMER_ENCODER )
-                        tokens = tokenizer.tokenize( cap, add_prefix_space = True )
-                    # print('tokens', tokens)
+                    tokenizer = RegexpTokenizer(r'\w+')
+                    tokens = tokenizer.tokenize( cap.lower() )
                     if len(tokens) == 0:
                         print('cap', cap)
                         continue

@@ -57,7 +57,7 @@ def build_super_images(real_imgs, captions, ixtoword,
                        attn_maps, att_sze, lr_imgs=None,
                        batch_size=cfg.TRAIN.BATCH_SIZE,
                        max_word_num=cfg.TEXT.WORDS_NUM):
-    nvis = 8
+    nvis = cfg.TRAIN.BATCH_SIZE
     real_imgs = real_imgs[:nvis]
     if lr_imgs is not None:
         lr_imgs = lr_imgs[:nvis]
@@ -101,14 +101,16 @@ def build_super_images(real_imgs, captions, ixtoword,
     # batch x seq_len x 17 x 17 --> batch x 1 x 17 x 17
     seq_len = max_word_num
     img_set = []
-    num = nvis  # len(attn_maps)
+    num =   len(attn_maps) #nvis
 
     text_map, sentences = \
         drawCaption(text_convas, captions, ixtoword, vis_size)
     text_map = np.asarray(text_map).astype(np.uint8)
 
     bUpdate = 1
+    # print(num, len(attn_maps))
     for i in range(num):
+        # print(attn_maps[i].shape)
         attn = attn_maps[i].cpu().view(1, -1, att_sze, att_sze)
         # --> 1 x 1 x 17 x 17
         attn_max = attn.max(dim=1, keepdim=True)

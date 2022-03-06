@@ -1,3 +1,7 @@
+'''
+Based on
+https://github.com/taoxugit/AttnGAN/blob/master/code/model.py
+'''
 import torch
 import torch.nn as nn
 import torch.nn.parallel
@@ -5,19 +9,38 @@ from torch.autograd import Variable
 from torchvision import models
 import torch.utils.model_zoo as model_zoo
 import torch.nn.functional as F
-
-from torch.nn.utils.rnn import pack_padded_sequence, pad_packed_sequence
-
 import numpy as np
+from torch.nn.utils.rnn import pack_padded_sequence, pad_packed_sequence
 
 from miscc.config import cfg
 from GlobalAttention import GlobalAttentionGeneral as ATT_NET
+from pytorch_pretrained_bert import BertModel
+
 
 from gan_lab.stylegan.architectures import StyleMappingNetwork, StyleConditionedMappingNetwork, \
                                            StyleAddNoise
 from gan_lab.utils.latent_utils import gen_rand_latent_vars
 from gan_lab.utils.custom_layers import LinearEx, Conv2dEx, Conv2dBias, Lambda, \
                                         NormalizeLayer, get_blur_op, concat_mbstd_layer
+
+class Upsample(nn.Module):
+    def __init__(self, size=None, scale_factor=None, mode='nearest', align_corners=None):
+        super().__init__()
+        self.size = size
+        self.scale_factor = float(scale_factor) if scale_factor else None
+        self.mode = mode
+        self.align_corners = align_corners
+
+    def forward(self, x):
+        return F.interpolate(x, self.size, self.scale_factor, self.mode, self.align_corners)
+
+    def extra_repr(self):
+        if self.scale_factor is not None:
+            info = 'scale_factor=' + str(self.scale_factor)
+        else:
+            info = 'size=' + str(self.size)
+        info += ', mode=' + self.mode
+        return info
 
 # ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++ #
 
@@ -130,8 +153,6 @@ class ResBlock(nn.Module):
 
 
 # ############## Text2Image Encoder-Decoder #######
-TRANSFORMER_ENCODER = 'gpt2'
-
 class RNN_ENCODER(nn.Module):
     def __init__(self, ntoken, ninput=300, drop_prob=0.5,
                  nhidden=128, nlayers=1, bidirectional=True):
@@ -218,8 +239,66 @@ class RNN_ENCODER(nn.Module):
         sent_emb = sent_emb.view(-1, self.nhidden * self.num_directions)
         return words_emb, sent_emb
 
+class BERT_RNN_ENCODER(RNN_ENCODER):
+    def define_module(self):
+        self.encoder = BertModel.from_pretrained('bert-base-uncased')
+        for param in self.encoder.parameters():
+            param.requires_grad = False
+        self.bert_linear = nn.Linear(768, self.ninput)
+        self.drop = nn.Dropout(self.drop_prob)
+        if self.rnn_type == 'LSTM':
+            # dropout: If non-zero, introduces a dropout layer on
+            # the outputs of each RNN layer except the last layer
+            self.rnn = nn.LSTM(self.ninput, self.nhidden,
+                               self.nlayers, batch_first=True,
+                               dropout=self.drop_prob,
+                               bidirectional=self.bidirectional)
+        elif self.rnn_type == 'GRU':
+            self.rnn = nn.GRU(self.ninput, self.nhidden,
+                              self.nlayers, batch_first=True,
+                              dropout=self.drop_prob,
+                              bidirectional=self.bidirectional)
+        else:
+            raise NotImplementedError
 
-# ############## G networks ###################
+    def init_weights(self):
+        initrange = 0.1
+        self.bert_linear.weight.data.uniform_(-initrange, initrange)
+        # Do not need to initialize RNN parameters, which have been initialized
+        # http://pytorch.org/docs/master/_modules/torch/nn/modules/rnn.html#LSTM
+        # self.decoder.weight.data.uniform_(-initrange, initrange)
+        # self.decoder.bias.data.fill_(0)
+
+    def forward(self, captions, cap_lens, hidden, mask=None):
+        # input: torch.LongTensor of size batch x n_steps
+        # --> emb: batch x n_steps x ninput
+        emb, _ = self.encoder(captions, output_all_encoded_layers=False)
+        emb = self.bert_linear(emb)
+        emb = self.drop(emb)
+        #
+        # Returns: a PackedSequence object
+        cap_lens = cap_lens.data.tolist()
+        emb = pack_padded_sequence(emb, cap_lens, batch_first=True)
+        # #hidden and memory (num_layers * num_directions, batch, hidden_size):
+        # tensor containing the initial hidden state for each element in batch.
+        # #output (batch, seq_len, hidden_size * num_directions)
+        # #or a PackedSequence object:
+        # tensor containing output features (h_t) from the last layer of RNN
+        output, hidden = self.rnn(emb, hidden)
+        # PackedSequence object
+        # --> (batch, seq_len, hidden_size * num_directions)
+        output = pad_packed_sequence(output, batch_first=True)[0]
+        # output = self.drop(output)
+        # --> batch x hidden_size*num_directions x seq_len
+        words_emb = output.transpose(1, 2)
+        # --> batch x num_directions*hidden_size
+        if self.rnn_type == 'LSTM':
+            sent_emb = hidden[0].transpose(0, 1).contiguous()
+        else:
+            sent_emb = hidden.transpose(0, 1).contiguous()
+        sent_emb = sent_emb.view(-1, self.nhidden * self.num_directions)
+        return words_emb, sent_emb
+
 class CNN_ENCODER(nn.Module):
     def __init__(self, nef):
         super(CNN_ENCODER, self).__init__()
@@ -231,7 +310,7 @@ class CNN_ENCODER(nn.Module):
         model = models.inception_v3()
         url = 'https://download.pytorch.org/models/inception_v3_google-1a9a5a14.pth'
         model.load_state_dict(model_zoo.load_url(url))
-        for param in model.parameters():
+        for param in model.parameters(): # freeze inception model
             param.requires_grad = False
         print('Load pretrained model from ', url)
         # print(model)
@@ -268,7 +347,7 @@ class CNN_ENCODER(nn.Module):
     def forward(self, x):
         features = None
         # --> fixed-size input: batch x 3 x 299 x 299
-        x = nn.functional.interpolate(x,size=(299, 299), mode='bilinear', align_corners=False)
+        x = Upsample(size=(299, 299), mode='bilinear')(x)
         # 299 x 299 x 3
         x = self.Conv2d_1a_3x3(x)
         # 149 x 149 x 32
@@ -321,12 +400,117 @@ class CNN_ENCODER(nn.Module):
         # 2048
 
         # global image features
-        cnn_code = self.emb_cnn_code(x)
-        # 512
-        if features is not None:
-            features = self.emb_features(features)
+        cnn_code = self.emb_cnn_code(x) # nef
 
+        if features is not None:
+            features = self.emb_features(features) # 17 x 17 x nef
         return features, cnn_code
+
+
+# ############## Image2text Encoder-Decoder #######
+class CNN_ENCODER_RNN_DECODER(CNN_ENCODER):
+    def __init__(self, emb_size, hidden_size, vocab_size, nlayers=1, bidirectional=True, rec_unit='LSTM', dropout=0.5):
+        """
+        Based on https://github.com/komiya-m/MirrorGAN/blob/master/model.py
+        :param emb_size: size of word embeddings
+        :param hidden_size: size of hidden state of the recurrent unit
+        :param vocab_size: size of the vocabulary (output of the network)
+        :param rec_unit: type of recurrent unit (default=gru)
+        """
+        self.dropout = dropout
+        self.nlayers = nlayers
+        self.bidirectional = bidirectional
+        self.num_directions = 2 if self.bidirectional else 1
+        __rec_units = {
+            'GRU': nn.GRU,
+            'LSTM': nn.LSTM,
+        }
+        assert rec_unit in __rec_units, 'Specified recurrent unit is not available'
+
+        super().__init__(emb_size)
+
+        self.hidden_linear = nn.Linear(emb_size, hidden_size)
+        self.encoder = nn.Embedding(vocab_size, emb_size)
+        self.rnn = __rec_units[rec_unit](emb_size, hidden_size, num_layers=self.nlayers,
+                        batch_first=True, dropout=self.dropout, bidirectional=self.bidirectional)
+        self.out = nn.Linear(self.num_directions * hidden_size, vocab_size)
+
+    def forward(self, x, captions):
+        # (bs x 17 x 17 x nef), (bs x nef)
+        features, cnn_code = super().forward(x)
+        # (bs x nef)
+        cnn_hidden = self.hidden_linear(cnn_code)
+        # (bs x hidden_size)
+
+        #  (num_layers * num_directions, batch, hidden_size)
+        h_0 = cnn_hidden.unsqueeze(0).repeat(self.nlayers * self.num_directions, 1, 1)
+        c_0 = torch.zeros(h_0.shape).to(h_0.device)
+
+        # bs x T x vocab_size
+        text_embeddings = self.encoder(captions)
+        # bs x T x nef
+        output, (hn, cn) = self.rnn(text_embeddings, (h_0, c_0))
+        # bs, T, hidden_size
+        logits = self.out(output)
+        # bs, T, vocab_size
+
+        return features, cnn_code, logits
+
+class BERT_CNN_ENCODER_RNN_DECODER(CNN_ENCODER):
+    def __init__(self, emb_size, hidden_size, vocab_size, nlayers=1, bidirectional=True, rec_unit='LSTM', dropout=0.5):
+        """
+        Based on https://github.com/komiya-m/MirrorGAN/blob/master/model.py
+        :param emb_size: size of word embeddings
+        :param hidden_size: size of hidden state of the recurrent unit
+        :param vocab_size: size of the vocabulary (output of the network)
+        :param rec_unit: type of recurrent unit (default=gru)
+        """
+        self.dropout = dropout
+        self.nlayers = nlayers
+        self.bidirectional = bidirectional
+        self.num_directions = 2 if self.bidirectional else 1
+        __rec_units = {
+            'GRU': nn.GRU,
+            'LSTM': nn.LSTM,
+        }
+        assert rec_unit in __rec_units, 'Specified recurrent unit is not available'
+
+        super().__init__(emb_size)
+
+        self.hidden_linear = nn.Linear(emb_size, hidden_size)
+        self.encoder = BertModel.from_pretrained('bert-base-uncased')
+        for param in self.encoder.parameters():
+            param.requires_grad = False
+
+        self.bert_linear = nn.Linear(768, emb_size)
+        self.rnn = __rec_units[rec_unit](emb_size, hidden_size, num_layers=self.nlayers,
+                        batch_first=True, dropout=self.dropout, bidirectional=self.bidirectional)
+
+        self.out = nn.Linear(self.num_directions * hidden_size, vocab_size)
+
+    def forward(self, x, captions):
+        # (bs x 17 x 17 x nef), (bs x nef)
+        features, cnn_code = super().forward(x)
+        # (bs x nef)
+        cnn_hidden = self.hidden_linear(cnn_code)
+        # (bs x hidden_size)
+
+        #  (num_layers * num_directions, batch, hidden_size)
+        h_0 = cnn_hidden.unsqueeze(0).repeat(self.nlayers * self.num_directions, 1, 1)
+        c_0 = torch.zeros(h_0.shape).to(h_0.device)
+
+        # bs x T x vocab_size
+        # get last layer of bert encoder
+        text_embeddings, _ = self.encoder(captions, output_all_encoded_layers=False)
+        # bs x T x 768
+        text_embeddings = self.bert_linear(text_embeddings)
+        # bs x T x emb_size
+        output, (hn, cn) = self.rnn(text_embeddings, (h_0, c_0))
+        # bs, T, hidden_size
+        logits = self.out(output)
+        # bs, T, vocab_size
+
+        return features, cnn_code, logits
 
 
 # ############## G networks ###################

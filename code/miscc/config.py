@@ -79,10 +79,14 @@ __C.GAN.BLUR_TYPE = 'binomial'   # type of low-pass filter to use for better ups
 # AttnGAN model options only
 __C.GAN.R_NUM = 2
 
+__C.CNN_RNN = edict()
+__C.CNN_RNN.HIDDEN_DIM = 768
+
+
 
 __C.TEXT = edict()
 __C.TEXT.CAPTIONS_PER_IMAGE = 10
-__C.TEXT.EMBEDDING_DIM = 256  # 768 # 256 for the default RNN_ENCODER bi-directional LSTM
+__C.TEXT.EMBEDDING_DIM = 768  # 768 # 256 for the default RNN_ENCODER bi-directional LSTM
 __C.TEXT.WORDS_NUM = 18
 
 
