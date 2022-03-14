@@ -61,12 +61,7 @@ class condGANTrainer(object):
             print("Error: no pretrained text-image encoders")
             return
 
-        image_encoder = BERT_CNN_ENCODER_RNN_DECODER(
-            cfg.TEXT.EMBEDDING_DIM,
-            cfg.CNN_RNN.HIDDEN_DIM,
-            self.n_words,
-            rec_unit=cfg.RNN_TYPE,
-        )
+        image_encoder = CNN_ENCODER(cfg.TEXT.EMBEDDING_DIM)
         img_encoder_path = cfg.TRAIN.NET_E.replace("text_encoder", "image_encoder")
         state_dict = torch.load(
             img_encoder_path, map_location=lambda storage, loc: storage
@@ -84,7 +79,7 @@ class condGANTrainer(object):
         text_encoder.load_state_dict(state_dict)
         for p in text_encoder.parameters():
             p.requires_grad = False
-        print("Load text encoder from:", cfg.TRAIN.NET_E)
+        # print("Load text encoder from:", cfg.TRAIN.NET_E)
         text_encoder.eval()
 
         # #######################generator and discriminators############## #
@@ -370,12 +365,13 @@ class condGANTrainer(object):
                 # (1) Prepare training data and Compute text embeddings
                 ######################################################
                 data = data_iter.next()
-                imgs, captions, cap_lens, class_ids, keys = prepare_data(data)
+                imgs, captions, cap_lens, sent_emb, words_embs, class_ids, keys = prepare_data(data)
 
-                hidden = text_encoder.init_hidden(batch_size)
+                # hidden = text_encoder.init_hidden(batch_size)
+                # hidden = text_encoder.init_hidden(batch_size)
 
-                words_embs, sent_emb = text_encoder(captions, cap_lens, hidden)
-                words_embs, sent_emb = words_embs.detach(), sent_emb.detach()
+                # words_embs, sent_emb = text_encoder(captions, cap_lens, hidden)
+                # words_embs, sent_emb = words_embs.detach(), sent_emb.detach()
                 mask = captions == 0
                 num_words = words_embs.size(2)
                 if mask.size(1) > num_words:
@@ -535,16 +531,16 @@ class condGANTrainer(object):
                 # if step > 50:
                 #     break
 
-                imgs, captions, cap_lens, class_ids, keys = prepare_data(data)
+                imgs, captions, cap_lens, sent_emb, words_embs, class_ids, keys = prepare_data(data)
 
                 #######################################################
                 # (1) Extract text embeddings
                 ######################################################
-                words_embs = text_encoder(captions)[0].transpose(1, 2).contiguous()
-                sent_emb = words_embs[:, :, -1].contiguous()
+                # words_embs = text_encoder(captions)[0].transpose(1, 2).contiguous()
+                # sent_emb = words_embs[:, :, -1].contiguous()
                 # words_embs: batch_size x nef x seq_len
                 # sent_emb: batch_size x nef
-                words_embs, sent_emb = words_embs.detach(), sent_emb.detach()
+                # words_embs, sent_emb = words_embs.detach(), sent_emb.detach()
                 mask = captions == 0
                 num_words = words_embs.size(2)
                 if mask.size(1) > num_words:

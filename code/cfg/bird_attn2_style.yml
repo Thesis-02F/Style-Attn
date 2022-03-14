@@ -18,10 +18,10 @@ TRAIN:
     BATCH_SIZE: 3  # 22
     MAX_EPOCH: 600
     SNAPSHOT_INTERVAL: 2
-    DISCRIMINATOR_LR: 0.0002
-    GENERATOR_LR: 0.0002
+    DISCRIMINATOR_LR: 0.002
+    GENERATOR_LR: 0.002
     #
-    NET_E: '/home/cse-p07-217-02f/Style-AttnGAN/code/output/birds_DAMSM_2022_03_03_13_40_47/Model/text_encoder600.pth'
+    NET_E: '/home/cse-p07-217-02f/Style-AttnGAN/output/birds_DAMSM_2022_03_10_14_35_54/Model/text_encoder200.pth'
     SMOOTH:
         GAMMA1: 4.0  # 1,2,5 good 4 best  10&100bad
         GAMMA2: 5.0

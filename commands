@@ -1,2 +1,2 @@
-python pretrain_DAMSM.py --cfg cfg/DAMSM/bird.yml --gpu 0 --text_encoder_type=transformer
+python pretrain_DAMSM_pure.py --cfg cfg/DAMSM/bird.yml --gpu 0 --text_encoder_type=transformer
 python main.py --cfg cfg/bird_attn2_style.yml --gpu 1

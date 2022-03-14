@@ -21,6 +21,7 @@ import sys
 import numpy as np
 import pandas as pd
 from PIL import Image
+from tqdm import tqdm
 import numpy.random as random
 if sys.version_info[0] == 2:
     import cPickle as pickle
@@ -29,7 +30,7 @@ else:
 
 
 def prepare_data( data ):
-    imgs, captions, captions_lens, class_ids, keys = data
+    imgs, captions, captions_lens, sent_emb, words_embs, class_ids, keys = data
 
     # sort data by the length in a descending order
     sorted_cap_lens, sorted_cap_indices = \
@@ -56,7 +57,21 @@ def prepare_data( data ):
         sorted_cap_lens = Variable(sorted_cap_lens)
 
     return [real_imgs, captions, sorted_cap_lens,
-            class_ids, keys]
+            sent_emb, words_embs, class_ids, keys]
+
+
+def prepare_captions( captions, captions_lens ):
+    captions = np.expand_dims(captions.squeeze(), 0)
+    captions_lens = np.expand_dims(captions_lens, 0)
+
+    if cfg.CUDA:
+        captions = Variable(torch.from_numpy(captions)).cuda()
+        captions_lens = Variable(torch.from_numpy(captions_lens)).cuda()
+    else:
+        captions = Variable(captions)
+        captions_lens = Variable(captions_lens)
+
+    return captions, captions_lens
 
 
 def get_imgs(img_path, imsize, bbox=None,
@@ -120,6 +135,7 @@ class TextDataset(data.Dataset):
         print( data_dir )
         self.filenames, self.captions, self.ixtoword, \
             self.wordtoix, self.n_words = self.load_text_data(data_dir, split)
+        self.embeddings = self.load_embedding_data(data_dir, split)
 
         self.class_id = self.load_class_id(split_dir, len(self.filenames))
         self.number_example = len(self.filenames)
@@ -298,6 +314,68 @@ class TextDataset(data.Dataset):
             x_len = cfg.TEXT.WORDS_NUM
         return x, x_len
 
+    def load_embedding_data(self, data_dir, split):
+        if split == 'train':
+            filepath = os.path.join(data_dir, 'train_embeddings.pickle')
+        else:  # split=='test'
+            filepath = os.path.join(data_dir, 'test_embeddings.pickle')
+        print( filepath )
+
+        all_embeddings = [] #(sent_emb, word_embs)
+        if not os.path.isfile(filepath):
+            # Text encoder initialization
+            from model import BERT_RNN_ENCODER
+            torch.cuda.set_device(cfg.GPU_ID)
+
+            text_encoder = BERT_RNN_ENCODER(self.n_words, nhidden=cfg.TEXT.EMBEDDING_DIM)
+            state_dict = torch.load(
+                cfg.TRAIN.NET_E, map_location=lambda storage, loc: storage
+            )
+            text_encoder.load_state_dict(state_dict)
+            for p in text_encoder.parameters():
+                p.requires_grad = False
+            print("Load text encoder from:", cfg.TRAIN.NET_E)
+            text_encoder.eval()
+
+            for i in tqdm(range(len(self.captions))):
+                captions, cap_lens = self.get_caption(i)
+                captions, cap_lens = prepare_captions(captions, cap_lens)
+
+                hidden = text_encoder.init_hidden(1)
+                if cfg.CUDA:
+                    temp = []
+                    for j in range(len(hidden)):
+                        temp.append(hidden[j].cuda())
+                    if len(temp) > 1:
+                        hidden = tuple(temp)
+                    else:
+                        hidden = temp[0]
+
+                print('##########################')
+                print(captions.device)
+                print(cap_lens.device)
+                print(hidden[0].device)
+                print(hidden[1].device)
+                print(len(hidden))
+                input('waiting')
+
+                words_embs, sent_emb = text_encoder(captions, cap_lens, hidden)
+                words_embs, sent_emb = words_embs.detach(), sent_emb.detach()
+
+                all_embeddings.append((sent_emb, words_embs))
+
+            with open(filepath, 'wb') as f:
+                pickle.dump(all_embeddings, f, protocol=2)
+                print('Save to: ', filepath)
+        else:
+            with open(filepath, 'rb') as f:
+                x = pickle.load(f)
+                all_embeddings = x
+                del x
+                print('Load from: ', filepath)
+                
+        return all_embeddings
+
     def __getitem__(self, index):
         #
         key = self.filenames[index]
@@ -318,7 +396,9 @@ class TextDataset(data.Dataset):
         # sent_ix = 0
         new_sent_ix = index * self.embeddings_num + sent_ix
         caps, cap_len = self.get_caption(new_sent_ix)
-        return imgs, caps, cap_len, cls_id, key
+        (sent_emb, words_embs) = self.all_embeddings[new_sent_ix]
+        words_embs, sent_emb = words_embs.squeeze(), sent_emb.squeeze()
+        return imgs, caps, cap_len, sent_emb, words_embs, cls_id, key
 
 
     def __len__(self):
